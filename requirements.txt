@@ -1,12 +1,13 @@
 fastapi[all]
 uvicorn
-supabase==2.4.0
+supabase==2.3.4
+gotrue==2.4.2
+httpx==0.25.2
 pydantic>=2.0
 pydantic-settings
 bcrypt
 python-jose[cryptography]
 python-multipart
 twilio
-httpx
 pytest
 python-dotenv
