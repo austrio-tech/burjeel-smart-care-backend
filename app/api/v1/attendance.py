@@ -1,0 +1,99 @@
+from datetime import date, datetime
+from typing import Optional, List
+from fastapi import APIRouter, Depends, HTTPException, status, Query
+from app.schemas import AttendanceCreate, AttendanceUpdate, AttendanceResponse
+from app.api.deps import get_current_active_user, RoleChecker
+from app.core.supabase import supabase
+from fastapi.concurrency import run_in_threadpool
+
+router = APIRouter()
+
+
+@router.post("/", response_model=AttendanceResponse, status_code=status.HTTP_201_CREATED)
+async def create_attendance(
+    attendance_in: AttendanceCreate,
+    current_user: dict = Depends(RoleChecker(["admin", "pharmacist"]))
+):
+    patient_result = await run_in_threadpool(
+        lambda: supabase.table("patients").select("*").eq("patient_id", attendance_in.patient_id).execute()
+    )
+    if not patient_result.data:
+        raise HTTPException(status_code=404, detail="Patient not found")
+    
+    if attendance_in.reminder_id:
+        reminder_result = await run_in_threadpool(
+            lambda: supabase.table("reminders").select("*").eq("reminder_id", attendance_in.reminder_id).execute()
+        )
+        if not reminder_result.data:
+            raise HTTPException(status_code=404, detail="Reminder not found")
+    
+    attendance_data = attendance_in.model_dump()
+    attendance_data["appointment_date"] = attendance_data["appointment_date"].isoformat()
+    attendance_data["marked_by"] = current_user["user_id"]
+    attendance_data["created_by"] = current_user["user_id"]
+    attendance_data["timestamp"] = datetime.utcnow().isoformat()
+    attendance_data["created_at"] = datetime.utcnow().isoformat()
+    attendance_data["updated_at"] = datetime.utcnow().isoformat()
+    
+    result = await run_in_threadpool(
+        lambda: supabase.table("attendance").insert(attendance_data).execute()
+    )
+    return result.data[0] if result.data else {}
+
+
+@router.get("/", response_model=List[AttendanceResponse])
+async def get_attendances(
+    patient_id: Optional[int] = None,
+    from_date: Optional[date] = Query(None),
+    to_date: Optional[date] = Query(None),
+    current_user: dict = Depends(get_current_active_user)
+):
+    query = supabase.table("attendance").select("*")
+    
+    if patient_id:
+        query = query.eq("patient_id", patient_id)
+    if from_date:
+        query = query.gte("appointment_date", from_date.isoformat())
+    if to_date:
+        query = query.lte("appointment_date", to_date.isoformat())
+    
+    result = await run_in_threadpool(lambda: query.execute())
+    return result.data
+
+
+@router.get("/{attendance_id}", response_model=AttendanceResponse)
+async def get_attendance(
+    attendance_id: int,
+    current_user: dict = Depends(get_current_active_user)
+):
+    result = await run_in_threadpool(
+        lambda: supabase.table("attendance").select("*").eq("attendance_id", attendance_id).execute()
+    )
+    attendance = result.data[0] if result.data else None
+    if not attendance:
+        raise HTTPException(status_code=404, detail="Attendance not found")
+    return attendance
+
+
+@router.put("/{attendance_id}", response_model=AttendanceResponse)
+async def update_attendance(
+    attendance_id: int,
+    attendance_in: AttendanceUpdate,
+    current_user: dict = Depends(RoleChecker(["admin", "pharmacist"]))
+):
+    result = await run_in_threadpool(
+        lambda: supabase.table("attendance").select("*").eq("attendance_id", attendance_id).execute()
+    )
+    attendance = result.data[0] if result.data else None
+    if not attendance:
+        raise HTTPException(status_code=404, detail="Attendance not found")
+    
+    update_data = attendance_in.model_dump(exclude_unset=True)
+    if "appointment_date" in update_data and update_data["appointment_date"]:
+        update_data["appointment_date"] = update_data["appointment_date"].isoformat()
+    update_data["updated_at"] = datetime.utcnow().isoformat()
+    
+    result = await run_in_threadpool(
+        lambda: supabase.table("attendance").update(update_data).eq("attendance_id", attendance_id).execute()
+    )
+    return result.data[0] if result.data else {}
