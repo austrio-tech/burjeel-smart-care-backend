@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
-from app.api.v1 import auth, patients, reminders, attendance, reports, chat
+from app.api.v1 import auth, patients, reminders, attendance, reports, chat, unified_reminders
 
 app = FastAPI(
     title=settings.APP_NAME,
@@ -22,6 +22,7 @@ app.include_router(reminders.router, prefix="/api/v1/reminders", tags=["Reminder
 app.include_router(attendance.router, prefix="/api/v1/attendance", tags=["Attendance"])
 app.include_router(reports.router, prefix="/api/v1/reports", tags=["Reports"])
 app.include_router(chat.router, prefix="/api/v1/chat", tags=["Chat"])
+app.include_router(unified_reminders.router, prefix="/api/v1/unified-reminders", tags=["Unified Reminders"])
 
 
 @app.get("/")

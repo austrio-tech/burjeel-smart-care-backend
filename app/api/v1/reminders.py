@@ -40,6 +40,16 @@ async def get_reminders(
         return result.data
 
 
+@router.get("/process-upcoming")
+async def process_upcoming_reminders():
+    """
+    Check for reminders in the next 2 days and send SMS/Email notifications.
+    This endpoint is public to allow easy triggering via browser or cron jobs.
+    """
+    result = await reminder_service.process_upcoming_reminders()
+    return result
+
+
 @router.get("/{reminder_id}", response_model=ReminderResponse)
 async def get_reminder(
     reminder_id: int,
