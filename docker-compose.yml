@@ -1,0 +1,15 @@
+services:
+  backend:
+    build: .
+    container_name: bsc-backend
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    volumes:
+      - .:/app
+    restart: always
+
+networks:
+  default:
+    name: bsc-network

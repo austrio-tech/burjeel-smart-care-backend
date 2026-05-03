@@ -24,6 +24,17 @@ FastAPI backend for Burjeel Smart Care patient management system.
    uvicorn app.main:app --reload
    ```
 
+## Docker Setup
+
+If you prefer to run the backend using Docker:
+
+1. Make sure you have Docker and Docker Compose installed.
+2. Build and start the container:
+   ```bash
+   docker-compose up --build
+   ```
+3. The API will be available at `http://localhost:8000`.
+
 ## API Documentation
 
 Visit `http://localhost:8000/docs` for Swagger UI or `http://localhost:8000/redoc` for ReDoc.
