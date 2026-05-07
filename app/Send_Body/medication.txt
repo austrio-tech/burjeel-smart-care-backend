@@ -1,0 +1,13 @@
+BURJEEL SMART CARE - Medication Reminder
+
+Hello {{patient_name}},
+
+Reminder: Please take your medication as prescribed.
+
+Type: {{reminder_type}}
+Details: {{reminder_details}}
+Due: {{scheduled_date}}
+
+Follow your doctor's instructions for dosage and timing. For questions, contact: +968 9010 8360
+
+Your health is our priority.

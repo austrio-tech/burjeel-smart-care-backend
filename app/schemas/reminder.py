@@ -5,10 +5,9 @@ from pydantic import BaseModel
 
 class ReminderBase(BaseModel):
     patient_id: int
-    medication_name: str
-    scheduled_date: date
+    display_name: Optional[str] = None
+    scheduled_date: datetime
     reminder_type: str = "medication"  # medication or doctor_visit
-    doctor_name: Optional[str] = None
 
 
 class ReminderCreate(ReminderBase):
@@ -16,18 +15,17 @@ class ReminderCreate(ReminderBase):
 
 
 class ReminderUpdate(BaseModel):
-    medication_name: Optional[str] = None
-    scheduled_date: Optional[date] = None
+    display_name: Optional[str] = None
+    scheduled_date: Optional[datetime] = None
     reminder_type: Optional[str] = None
-    doctor_name: Optional[str] = None
-    sent_status: Optional[str] = None
-    delivery_confirmation: Optional[str] = None
+    success_sent: Optional[int] = None
+    failed_sent: Optional[int] = None
 
 
 class ReminderResponse(ReminderBase):
     reminder_id: int
-    sent_status: str
-    delivery_confirmation: Optional[str] = None
+    success_sent: int = 0
+    failed_sent: int = 0
     created_at: datetime
     updated_at: datetime
 

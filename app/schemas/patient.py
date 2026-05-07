@@ -20,11 +20,16 @@ class PatientUpdate(BaseModel):
     full_name: Optional[str] = None
     phone_number: Optional[str] = None
     medical_record_ref: Optional[str] = None
+    registered_date: Optional[date] = None
 
 
 class PatientResponse(PatientBase):
     patient_id: int
     user_id: int
+    username: Optional[str] = None
+    email: Optional[str] = None
+    gender: Optional[str] = None
+    profile_picture_url: Optional[str] = None
     created_at: datetime
     updated_at: datetime
 

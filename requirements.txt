@@ -11,3 +11,8 @@ python-multipart
 twilio
 pytest
 python-dotenv
+pytz
+
+pyotp
+slowapi
+pytest-asyncio

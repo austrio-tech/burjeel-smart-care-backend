@@ -34,7 +34,7 @@ def check_rate_limit(user_id: int):
 @router.post("/", response_model=UnifiedReminderResponse)
 async def send_unified_reminder(
     request: UnifiedReminderRequest,
-    current_user: dict = Depends(RoleChecker(["admin", "pharmacist", "it_staff"]))
+    current_user: dict = Depends(RoleChecker(["admin", "doctor", "pharmacist", "it_staff"]))
 ):
     """
     Send a unified reminder via both SMS (Twilio) and Email (Gmail).

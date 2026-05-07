@@ -35,7 +35,9 @@ def test_process_upcoming_reminders(mock_process, mock_supabase):
                 "sent_status": "pending",
                 "patients": {
                     "phone_number": "+1234567890",
-                    "email": "patient@example.com"
+                    "users!patients_user_id_fkey": {
+                        "email": "patient@example.com"
+                    }
                 }
             }
         ]

@@ -12,7 +12,7 @@ router = APIRouter()
 @router.post("/", response_model=PatientResponse, status_code=status.HTTP_201_CREATED)
 async def create_patient(
     patient_in: PatientCreate,
-    current_user: dict = Depends(RoleChecker(["admin", "pharmacist"]))
+    current_user: dict = Depends(RoleChecker(["admin", "doctor"]))
 ):
     existing_user = await auth_service.get_user_by_username(patient_in.username)
     if existing_user:
@@ -43,41 +43,45 @@ async def create_patient(
     return await supabase_service.create_patient(patient_data)
 
 
-@router.get("/", response_model=List[PatientResponse])
-async def get_patients(
-    name: Optional[str] = None,
-    current_user: dict = Depends(RoleChecker(["admin", "pharmacist"]))
-):
-    return await supabase_service.get_patients(name)
-
-
-@router.get("/{patient_id}", response_model=PatientResponse)
-async def get_patient(
-    patient_id: int,
-    current_user: dict = Depends(get_current_active_user)
+@router.get("/me", response_model=PatientResponse)
+async def get_current_patient(
+    current_user: dict = Depends(RoleChecker(["patient"]))
 ):
     from app.core.supabase import supabase
     from fastapi.concurrency import run_in_threadpool
     
     result = await run_in_threadpool(
-        lambda: supabase.table("patients").select("*").eq("patient_id", patient_id).execute()
+        lambda: supabase.table("patients").select("*, users!patients_user_id_fkey(username, email, gender, profile_picture_url)").eq("user_id", current_user["user_id"]).execute()
     )
-    patient = result.data[0] if result.data else None
     
-    if not patient:
-        raise HTTPException(status_code=404, detail="Patient not found")
-    
-    if current_user["role"] == "patient" and patient["user_id"] != current_user["user_id"]:
-        raise HTTPException(status_code=403, detail="Not authorized")
-    
+    data = result.data if result.data else []
+    if not data:
+        raise HTTPException(status_code=404, detail="Patient profile not found")
+        
+    patient = data[0]
+    if "users" in patient and patient["users"]:
+        user_info = patient["users"][0] if isinstance(patient["users"], list) else patient["users"]
+        patient["username"] = user_info.get("username")
+        patient["email"] = user_info.get("email")
+        patient["gender"] = user_info.get("gender")
+        patient["profile_picture_url"] = user_info.get("profile_picture_url")
+        del patient["users"]
+        
     return patient
+
+@router.get("/", response_model=List[PatientResponse])
+async def get_patients(
+    name: Optional[str] = None,
+    current_user: dict = Depends(RoleChecker(["admin", "doctor"]))
+):
+    return await supabase_service.get_patients(name)
 
 
 @router.put("/{patient_id}", response_model=PatientResponse)
 async def update_patient(
     patient_id: int,
     patient_in: PatientUpdate,
-    current_user: dict = Depends(RoleChecker(["admin", "pharmacist"]))
+    current_user: dict = Depends(RoleChecker(["admin", "doctor"]))
 ):
     from app.core.supabase import supabase
     from fastapi.concurrency import run_in_threadpool
@@ -99,3 +103,27 @@ async def update_patient(
         lambda: supabase.table("patients").update(update_data).eq("patient_id", patient_id).execute()
     )
     return result.data[0] if result.data else {}
+
+@router.delete("/{patient_id}")
+async def delete_patient(
+    patient_id: int,
+    current_user: dict = Depends(RoleChecker(["admin"]))
+):
+    from app.core.supabase import supabase
+    from fastapi.concurrency import run_in_threadpool
+    
+    # First get the user_id so we can delete the core user account too if needed
+    result = await run_in_threadpool(
+        lambda: supabase.table("patients").select("*").eq("patient_id", patient_id).execute()
+    )
+    patient = result.data[0] if result.data else None
+    if not patient:
+        raise HTTPException(status_code=404, detail="Patient not found")
+        
+    # Delete the user account which will cascade to patient if configured, 
+    # but we'll do both to be safe
+    await run_in_threadpool(
+        lambda: supabase.table("users").delete().eq("user_id", patient["user_id"]).execute()
+    )
+    
+    return {"message": "Patient deleted successfully"}

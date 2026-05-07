@@ -19,12 +19,25 @@ class SupabaseService:
 
     @staticmethod
     async def get_patients(name: Optional[str] = None) -> List[Dict[str, Any]]:
-        query = supabase.table("patients").select("*")
+        # Fetch patient details alongside their associated user details using the exact foreign key
+        query = supabase.table("patients").select("*, users!patients_user_id_fkey(username, email, gender, profile_picture_url)")
         if name:
             query = query.ilike("full_name", f"%{name}%")
         
         result = await run_in_threadpool(lambda: query.execute())
-        return result.data
+        data = result.data if result.data else []
+        
+        # Flatten the nested users dict into the patient dict for easier frontend consumption
+        for patient in data:
+            if "users" in patient and patient["users"]:
+                user_info = patient["users"][0] if isinstance(patient["users"], list) else patient["users"]
+                patient["username"] = user_info.get("username")
+                patient["email"] = user_info.get("email")
+                patient["gender"] = user_info.get("gender")
+                patient["profile_picture_url"] = user_info.get("profile_picture_url")
+                del patient["users"]
+        
+        return data
 
     @staticmethod
     async def create_patient(patient_data: Dict[str, Any]) -> Dict[str, Any]:

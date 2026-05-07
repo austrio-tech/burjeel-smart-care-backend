@@ -1,81 +1,51 @@
-from typing import Optional, Dict, Any, Tuple
+import logging
+import httpx
 from app.core.config import settings
-from app.core.supabase import supabase
-from fastapi.concurrency import run_in_threadpool
-from datetime import datetime
 
-try:
-    from twilio.rest import Client
-    TWILIO_AVAILABLE = True
-except ImportError:
-    TWILIO_AVAILABLE = False
+logger = logging.getLogger(__name__)
 
-
-async def send_sms(
-    reminder: Dict[str, Any],
-    patient: Dict[str, Any],
-    created_by: Optional[int] = None
-) -> Tuple[bool, str]:
-    if not TWILIO_AVAILABLE or not settings.TWILIO_ACCOUNT_SID:
-        gateway_response = "Twilio not configured"
-        sms_log_data = {
-            "reminder_id": reminder["reminder_id"],
-            "gateway_response": gateway_response,
-            "created_by": created_by,
-            "sent_timestamp": datetime.utcnow().isoformat(),
-            "created_at": datetime.utcnow().isoformat(),
-            "updated_at": datetime.utcnow().isoformat()
-        }
-        await run_in_threadpool(lambda: supabase.table("sms_log").insert(sms_log_data).execute())
-        
-        await run_in_threadpool(
-            lambda: supabase.table("reminders").update({
-                "sent_status": "failed",
-                "delivery_confirmation": "failed",
-                "updated_at": datetime.utcnow().isoformat()
-            }).eq("reminder_id", reminder["reminder_id"]).execute()
-        )
-        return False, gateway_response
-
-    client = Client(settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)
+async def send_textbee_sms(phone_number: str, message: str) -> bool:
+    """
+    Sends SMS using TextBee API.
+    """
+    if not settings.KEY:
+        logger.error("TextBee KEY not configured")
+        return False
     
-    if reminder.get("reminder_type") == "doctor_visit":
-        doctor_info = f" with Dr. {reminder['doctor_name']}" if reminder.get("doctor_name") else ""
-        message_body = f"Reminder: You have a doctor visit appointment{doctor_info} on {reminder['scheduled_date']}. - Burjeel Smart Care"
-    else:
-        message_body = f"Reminder: Please take your medication '{reminder['medication_name']}' on {reminder['scheduled_date']}. - Burjeel Smart Care"
+    # TextBee API requires device ID in the URL.
+    # The current KEY in settings might be the API key, 
+    # but we also need a DEVICE_ID if we are to use the correct endpoint.
+    # Based on TextBee documentation, the endpoint is:
+    # https://api.textbee.dev/api/v1/gateway/devices/{DEVICE_ID}/send-sms
     
-    sent_status = "failed"
-    delivery_confirmation = "failed"
+    # As I don't have a DEVICE_ID environment variable, I'll log an error for now
+    # or you might need to add DEVICE_ID to settings.
+    
+    # Assuming you might have the Device ID or it's part of your configuration.
+    device_id = settings.DEVICE_ID
+    if not device_id:
+        logger.error("TextBee DEVICE_ID not configured")
+        return False
+
+    url = f"https://api.textbee.dev/api/v1/gateway/devices/{device_id}/send-sms"
+    payload = {
+        "recipients": [phone_number],
+        "message": message
+    }
+    headers = {
+        "x-api-key": settings.KEY,
+        "Content-Type": "application/json"
+    }
     
     try:
-        message = client.messages.create(
-            body=message_body,
-            from_=settings.TWILIO_PHONE_NUMBER,
-            to=patient["phone_number"]
-        )
-        gateway_response = f"Message SID: {message.sid}"
-        sent_status = "sent"
-        delivery_confirmation = "delivered"
+        async with httpx.AsyncClient() as client:
+            response = await client.post(url, json=payload, headers=headers, timeout=10)
+            if response.status_code in [200, 201]:
+                logger.info(f"SMS sent successfully via TextBee to {phone_number}")
+                return True
+            else:
+                logger.error(f"TextBee API error: {response.text}")
+                return False
     except Exception as e:
-        gateway_response = str(e)
-
-    sms_log_data = {
-        "reminder_id": reminder["reminder_id"],
-        "gateway_response": gateway_response,
-        "created_by": created_by,
-        "sent_timestamp": datetime.utcnow().isoformat(),
-        "created_at": datetime.utcnow().isoformat(),
-        "updated_at": datetime.utcnow().isoformat()
-    }
-    await run_in_threadpool(lambda: supabase.table("sms_log").insert(sms_log_data).execute())
-    
-    await run_in_threadpool(
-        lambda: supabase.table("reminders").update({
-            "sent_status": sent_status,
-            "delivery_confirmation": delivery_confirmation,
-            "updated_at": datetime.utcnow().isoformat()
-        }).eq("reminder_id", reminder["reminder_id"]).execute()
-    )
-    
-    return sent_status == "sent", gateway_response
+        logger.error(f"Failed to send SMS via TextBee: {str(e)}")
+        return False

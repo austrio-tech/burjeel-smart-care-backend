@@ -2,65 +2,203 @@ from typing import List, Dict, Any, Optional
 from app.schemas import ReminderCreate, ReminderUpdate
 from app.core.supabase import supabase
 from fastapi.concurrency import run_in_threadpool
-from datetime import datetime
-
 from datetime import datetime, timedelta
+import pytz
+
 from app.services.unified_reminder_service import process_unified_reminder
 from app.schemas.unified_reminder import UnifiedReminderRequest
 
-async def process_upcoming_reminders() -> Dict[str, Any]:
+import logging
+import os
+
+# Configure logging
+logger = logging.getLogger(__name__)
+
+MUSCAT_TZ = pytz.timezone("Asia/Muscat")
+
+def format_muscat_time(dt_str: str) -> str:
     """
-    Find reminders scheduled for the next 2 days and send notifications.
+    Convert UTC datetime string to Asia/Muscat and format as '2:30 PM'.
     """
-    today = datetime.utcnow().date()
-    two_days_later = today + timedelta(days=2)
+    try:
+        # Parse the ISO string
+        dt = datetime.fromisoformat(dt_str.replace('Z', '+00:00'))
+        
+        # Ensure it's UTC if no timezone info
+        if dt.tzinfo is None:
+            dt = pytz.utc.localize(dt)
+            
+        # Convert to Muscat
+        muscat_dt = dt.astimezone(MUSCAT_TZ)
+        
+        # Format as '2:30 PM'
+        return muscat_dt.strftime("%I:%M %p")
+    except Exception as e:
+        logger.error(f"Error formatting Muscat time: {str(e)}")
+        return dt_str
+
+def format_muscat_date(dt_str: str) -> str:
+    """
+    Convert UTC datetime string to Asia/Muscat and format as 'May 04, 2026'.
+    """
+    try:
+        dt = datetime.fromisoformat(dt_str.replace('Z', '+00:00'))
+        if dt.tzinfo is None:
+            dt = pytz.utc.localize(dt)
+        muscat_dt = dt.astimezone(MUSCAT_TZ)
+        return muscat_dt.strftime("%B %d, %Y")
+    except Exception as e:
+        logger.error(f"Error formatting Muscat date: {str(e)}")
+        return dt_str
+
+def get_template(template_name: str, ext: str = "html", **kwargs) -> str:
+    """
+    Load, populate, and return content from the template file.
+    """
+    template_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "Send_Body")
+    template_path = os.path.join(template_dir, f"{template_name}.{ext}")
     
-    # Fetch reminders in range that are still 'pending'
+    try:
+        with open(template_path, "r", encoding="utf-8") as f:
+            content = f.read()
+            
+        for key, value in kwargs.items():
+            placeholder = f"{{{{{key}}}}}"
+            logger.debug(f"Attempting to replace {placeholder} with {value}")
+            content = content.replace(placeholder, str(value))
+        
+        return content
+    except Exception as e:
+        logger.error(f"Failed to load template {template_name}.{ext}: {str(e)}")
+        # Fallback or re-raise
+        return f"Content: {str(kwargs)}"
+
+
+async def _process_reminders(start_dt: datetime, end_dt: datetime) -> Dict[str, Any]:
+    """
+    Find reminders scheduled between start_dt and end_dt and send notifications.
+    """
+    logger.info(f"Processing reminders from {start_dt} to {end_dt}")
+    
+    # Fetch reminders in range that haven't been successfully sent yet
+    # Join patients and their associated user to get the email
     result = await run_in_threadpool(
         lambda: supabase.table("reminders")
-        .select("*, patients(*)")
-        .gte("scheduled_date", today.isoformat())
-        .lte("scheduled_date", two_days_later.isoformat())
-        .eq("sent_status", "pending")
+        .select("*, patients(*, users!patients_user_id_fkey(*))")
+        .gte("scheduled_date", start_dt.isoformat())
+        .lte("scheduled_date", end_dt.isoformat())
+        .eq("success_sent", 0)
         .execute()
     )
     
     reminders = result.data if result.data else []
+    logger.info(f"Found {len(reminders)} pending reminders")
+    
     processed_count = 0
     success_count = 0
     
     for reminder in reminders:
-        patient = reminder.get("patients")
-        if not patient or not patient.get("phone_number") or not patient.get("email"):
+        reminder_id = reminder.get("reminder_id")
+        # Handle potential list or dict for joined data
+        patient_data = reminder.get("patients")
+        if isinstance(patient_data, list):
+            patient = patient_data[0] if patient_data else None
+        else:
+            patient = patient_data
+            
+        if not patient:
+            logger.warning(f"Reminder {reminder_id} has no associated patient data")
             continue
             
-        # Prepare message
-        if reminder.get("reminder_type") == "doctor_visit":
-            doctor_info = f" with Dr. {reminder['doctor_name']}" if reminder.get("doctor_name") else ""
-            message = f"Reminder: You have a doctor visit appointment{doctor_info} on {reminder['scheduled_date']}. - Burjeel Smart Care"
+        # Email is stored in the users table, linked to the patient
+        # Handle the explicit relationship key name from Supabase
+        user_data = patient.get("users!patients_user_id_fkey") or patient.get("users")
+        if isinstance(user_data, list):
+            user = user_data[0] if user_data else None
         else:
-            message = f"Reminder: Please take your medication '{reminder['medication_name']}' on {reminder['scheduled_date']}. - Burjeel Smart Care"
+            user = user_data
             
-        # Create unified request
-        request = UnifiedReminderRequest(
-            phone_number=patient["phone_number"],
-            email_address=patient["email"],
-            message_content=message,
-            subject="Appointment Reminder - Burjeel Smart Care"
+        email = user.get("email") if user else None
+        phone = patient.get("phone_number")
+        
+        if not phone or not email:
+            logger.warning(f"Reminder {reminder_id} skipped: missing phone ({phone}) or email ({email})")
+            continue
+            
+        logger.debug(f"Processing reminder {reminder_id} for patient {patient.get('patient_id')}")
+        
+        # Prepare message
+        reminder_type = reminder.get("reminder_type", "medication")
+        
+        # Determine the name to display (either medication name or doctor name)
+        # Using 'display_name' column as a generic 'name' field in DB
+        display_name = reminder.get("display_name", "item")
+        
+        # Format date and time for Muscat
+        scheduled_dt_str = str(reminder['scheduled_date'])
+        formatted_time = format_muscat_time(scheduled_dt_str)
+        formatted_date = format_muscat_date(scheduled_dt_str)
+        
+        if reminder_type == "doctor_visit":
+            details = f"Doctor visit appointment with Dr. {display_name}"
+            message = f"Reminder: You have a doctor visit appointment with Dr. {display_name} on {formatted_date} at {formatted_time}. - Burjeel Smart Care"
+        else:
+            details = f"Please take your medication '{display_name}'"
+            message = f"Reminder: Please take your medication '{display_name}' on {formatted_date} at {formatted_time}. - Burjeel Smart Care"
+            
+        # Generate HTML email content and SMS text content
+        template_name = reminder_type # e.g., 'medication' or 'appointment'
+        
+        email_html = get_template(
+            template_name,
+            ext="html",
+            patient_name=patient.get("full_name", "Patient"),
+            reminder_type=reminder_type.replace("_", " ").title(),
+            reminder_details=details,
+            scheduled_date=f"{formatted_date} at {formatted_time}"
         )
+        
+        sms_text = get_template(
+            template_name,
+            ext="txt",
+            patient_name=patient.get("full_name", "Patient"),
+            reminder_type=reminder_type.replace("_", " ").title(),
+            reminder_details=details,
+            scheduled_date=f"{formatted_date} at {formatted_time}"
+        )
+
+        # Create unified request
+        try:
+            request = UnifiedReminderRequest(
+                phone_number=phone,
+                email_address=email,
+                message_content=sms_text,
+                email_content=email_html,
+                subject=f"{reminder_type.replace('_', ' ').title()} Reminder - Burjeel Smart Care"
+            )
+        except Exception as e:
+            logger.error(f"Validation failed for reminder {reminder_id}: {str(e)}")
+            continue
         
         # Send notifications
         response = await process_unified_reminder(request)
         
         # Update reminder status
-        sent_status = "sent" if response.overall_success else "failed"
-        delivery_confirmation = "delivered" if response.overall_success else "failed"
+        current_success = reminder.get("success_sent") or 0
+        current_failed = reminder.get("failed_sent") or 0
+        
+        if response.overall_success:
+            current_success += 1
+        else:
+            current_failed += 1
+        
+        logger.info(f"Reminder {reminder_id} result: SMS={response.sms_status.success}, Email={response.email_status.success}")
         
         await run_in_threadpool(
             lambda: supabase.table("reminders")
             .update({
-                "sent_status": sent_status,
-                "delivery_confirmation": delivery_confirmation,
+                "success_sent": current_success,
+                "failed_sent": current_failed,
                 "updated_at": datetime.utcnow().isoformat()
             })
             .eq("reminder_id", reminder["reminder_id"])
@@ -77,6 +215,23 @@ async def process_upcoming_reminders() -> Dict[str, Any]:
         "successful": success_count
     }
 
+async def process_today_reminders() -> Dict[str, Any]:
+    """
+    Find reminders scheduled for today from now and send notifications.
+    """
+    now = datetime.utcnow()
+    # End of today
+    end_of_today = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    return await _process_reminders(now, end_of_today)
+
+async def process_upcoming_reminders() -> Dict[str, Any]:
+    """
+    Find reminders scheduled for the next 2 days from now and send notifications.
+    """
+    now = datetime.utcnow()
+    two_days_later = now + timedelta(days=2)
+    return await _process_reminders(now, two_days_later)
+
 async def create_reminder(
     reminder_in: ReminderCreate,
     created_by: Optional[int] = None
@@ -86,6 +241,17 @@ async def create_reminder(
     reminder_data["created_by"] = created_by
     reminder_data["created_at"] = datetime.utcnow().isoformat()
     reminder_data["updated_at"] = datetime.utcnow().isoformat()
+    
+    # Remove fields not present in the database 'reminders' table to avoid PGRST204
+    # Your schema has: reminder_id, patient_id, display_name, scheduled_date, sent_status, delivery_confirmation, created_at, updated_at, created_by, reminder_type, message_template
+    
+    # Remove 'message_template' if not needed (it's in the DB but often unused)
+    if "message_template" in reminder_data and reminder_data["message_template"] is None:
+        del reminder_data["message_template"]
+    
+    # Ensure reminder_type is correctly set for the DB check constraint
+    if "reminder_type" not in reminder_data or not reminder_data["reminder_type"] or reminder_data["reminder_type"] not in ["medication", "doctor_visit"]:
+        reminder_data["reminder_type"] = "medication"
     
     result = await run_in_threadpool(
         lambda: supabase.table("reminders").insert(reminder_data).execute()
@@ -112,6 +278,18 @@ async def update_reminder(
     if "scheduled_date" in update_data and update_data["scheduled_date"]:
         update_data["scheduled_date"] = update_data["scheduled_date"].isoformat()
     update_data["updated_at"] = datetime.utcnow().isoformat()
+    
+    # Remove fields not present in the database 'reminders' table to avoid PGRST204
+    # Your schema has: reminder_id, patient_id, display_name, scheduled_date, sent_status, delivery_confirmation, created_at, updated_at, created_by, reminder_type, message_template
+    
+    # Remove 'message_template' if not needed (it's in the DB but often unused)
+    if "message_template" in update_data and update_data["message_template"] is None:
+        del update_data["message_template"]
+    
+    # Ensure reminder_type is valid if updated
+    if "reminder_type" in update_data:
+        if not update_data["reminder_type"] or update_data["reminder_type"] not in ["medication", "doctor_visit"]:
+            update_data["reminder_type"] = "medication"
     
     result = await run_in_threadpool(
         lambda: supabase.table("reminders").update(update_data).eq("reminder_id", reminder_id).execute()

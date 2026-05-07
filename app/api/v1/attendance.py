@@ -12,7 +12,7 @@ router = APIRouter()
 @router.post("/", response_model=AttendanceResponse, status_code=status.HTTP_201_CREATED)
 async def create_attendance(
     attendance_in: AttendanceCreate,
-    current_user: dict = Depends(RoleChecker(["admin", "pharmacist"]))
+    current_user: dict = Depends(RoleChecker(["admin", "doctor", "pharmacist"]))
 ):
     patient_result = await run_in_threadpool(
         lambda: supabase.table("patients").select("*").eq("patient_id", attendance_in.patient_id).execute()
@@ -79,7 +79,7 @@ async def get_attendance(
 async def update_attendance(
     attendance_id: int,
     attendance_in: AttendanceUpdate,
-    current_user: dict = Depends(RoleChecker(["admin", "pharmacist"]))
+    current_user: dict = Depends(RoleChecker(["admin", "doctor", "pharmacist"]))
 ):
     result = await run_in_threadpool(
         lambda: supabase.table("attendance").select("*").eq("attendance_id", attendance_id).execute()
