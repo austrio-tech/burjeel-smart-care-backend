@@ -57,7 +57,6 @@ def get_template(template_name: str, ext: str = "html", **kwargs) -> str:
     """
     template_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "Send_Body")
     template_path = os.path.join(template_dir, f"{template_name}.{ext}")
-    
     try:
         with open(template_path, "r", encoding="utf-8") as f:
             content = f.read()
@@ -66,7 +65,6 @@ def get_template(template_name: str, ext: str = "html", **kwargs) -> str:
             placeholder = f"{{{{{key}}}}}"
             logger.debug(f"Attempting to replace {placeholder} with {value}")
             content = content.replace(placeholder, str(value))
-        
         return content
     except Exception as e:
         logger.error(f"Failed to load template {template_name}.{ext}: {str(e)}")
@@ -141,30 +139,37 @@ async def _process_reminders(start_dt: datetime, end_dt: datetime) -> Dict[str, 
         
         if reminder_type == "doctor_visit":
             details = f"Doctor visit appointment with Dr. {display_name}"
-            message = f"Reminder: You have a doctor visit appointment with Dr. {display_name} on {formatted_date} at {formatted_time}. - Burjeel Smart Care"
+            # message = f"Reminder: You have a doctor visit appointment with Dr. {display_name} on {formatted_date} at {formatted_time}. - Burjeel Smart Care"
         else:
             details = f"Please take your medication '{display_name}'"
-            message = f"Reminder: Please take your medication '{display_name}' on {formatted_date} at {formatted_time}. - Burjeel Smart Care"
+            # message = f"Reminder: Please take your medication '{display_name}' on {formatted_date} at {formatted_time}. - Burjeel Smart Care"
             
         # Generate HTML email content and SMS text content
-        template_name = reminder_type # e.g., 'medication' or 'appointment'
+        template_name = "appointment" if reminder_type == "doctor_visit" else "medication"
+        subject = "Appointment Reminder - Burjeel Smart Care" if reminder_type == "doctor_visit" else "Medication Reminder - Burjeel Smart Care"
         
         email_html = get_template(
             template_name,
             ext="html",
             patient_name=patient.get("full_name", "Patient"),
+            doctor_name=display_name if reminder_type == "doctor_visit" else "Doctor",
+            medication_name=display_name,
+            scheduled_date=formatted_date,
+            time=formatted_time,
             reminder_type=reminder_type.replace("_", " ").title(),
-            reminder_details=details,
-            scheduled_date=f"{formatted_date} at {formatted_time}"
+            reminder_details=details
         )
         
         sms_text = get_template(
             template_name,
             ext="txt",
             patient_name=patient.get("full_name", "Patient"),
+            doctor_name=display_name if reminder_type == "doctor_visit" else "Doctor",
+            medication_name=display_name,
+            scheduled_date=formatted_date,
+            time=formatted_time,
             reminder_type=reminder_type.replace("_", " ").title(),
-            reminder_details=details,
-            scheduled_date=f"{formatted_date} at {formatted_time}"
+            reminder_details=details
         )
 
         # Create unified request
@@ -174,7 +179,7 @@ async def _process_reminders(start_dt: datetime, end_dt: datetime) -> Dict[str, 
                 email_address=email,
                 message_content=sms_text,
                 email_content=email_html,
-                subject=f"{reminder_type.replace('_', ' ').title()} Reminder - Burjeel Smart Care"
+                subject=subject
             )
         except Exception as e:
             logger.error(f"Validation failed for reminder {reminder_id}: {str(e)}")
@@ -232,6 +237,65 @@ async def process_upcoming_reminders() -> Dict[str, Any]:
     two_days_later = now + timedelta(days=2)
     return await _process_reminders(now, two_days_later)
 
+async def send_issue_notification(reminder: dict, patient: dict, user: dict):
+    if not patient or not user or not user.get("email"):
+        return
+        
+    reminder_type = reminder.get("reminder_type", "medication")
+    display_name = reminder.get("display_name", "item")
+    phone = patient.get("phone_number")
+    email = user.get("email")
+    
+    # Format date and time for Muscat
+    scheduled_dt_str = str(reminder['scheduled_date'])
+    formatted_time = format_muscat_time(scheduled_dt_str)
+    formatted_date = format_muscat_date(scheduled_dt_str)
+    
+    if reminder_type == "doctor_visit":
+        details = f"Doctor visit appointment with Dr. {display_name}"
+        template_name = "appointment_issued"
+        subject = "Appointment Created Successfully - Burjeel Smart Care"
+    else:
+        details = f"Medication '{display_name}' has been issued"
+        template_name = "medication_issued"
+        subject = "Medication Issued Successfully - Burjeel Smart Care"
+        
+    email_html = get_template(
+        template_name,
+        ext="html",
+        patient_name=patient.get("full_name", "Patient"),
+        doctor_name=display_name if reminder_type == "doctor_visit" else "Doctor",
+        medication_name=display_name,
+        scheduled_date=formatted_date,
+        time=formatted_time,
+        reminder_type=reminder_type.replace("_", " ").title(),
+        reminder_details=details
+    )
+    
+    sms_text = get_template(
+        template_name,
+        ext="txt",
+        patient_name=patient.get("full_name", "Patient"),
+        doctor_name=display_name if reminder_type == "doctor_visit" else "Doctor",
+        medication_name=display_name,
+        scheduled_date=formatted_date,
+        time=formatted_time,
+        reminder_type=reminder_type.replace("_", " ").title(),
+        reminder_details=details
+    )
+    
+    try:
+        request = UnifiedReminderRequest(
+            phone_number=phone,
+            email_address=email,
+            message_content=sms_text,
+            email_content=email_html,
+            subject=subject
+        )
+        await process_unified_reminder(request)
+    except Exception as e:
+        logger.error(f"Failed to send issue notification for reminder {reminder.get('reminder_id')}: {str(e)}")
+
 async def create_reminder(
     reminder_in: ReminderCreate,
     created_by: Optional[int] = None
@@ -239,8 +303,9 @@ async def create_reminder(
     reminder_data = reminder_in.model_dump()
     reminder_data["scheduled_date"] = reminder_data["scheduled_date"].isoformat()
     reminder_data["created_by"] = created_by
-    reminder_data["created_at"] = datetime.utcnow().isoformat()
-    reminder_data["updated_at"] = datetime.utcnow().isoformat()
+    now = datetime.utcnow().isoformat()
+    reminder_data["created_at"] = now
+    reminder_data["updated_at"] = now
     
     # Remove fields not present in the database 'reminders' table to avoid PGRST204
     # Your schema has: reminder_id, patient_id, display_name, scheduled_date, sent_status, delivery_confirmation, created_at, updated_at, created_by, reminder_type, message_template
@@ -256,7 +321,9 @@ async def create_reminder(
     result = await run_in_threadpool(
         lambda: supabase.table("reminders").insert(reminder_data).execute()
     )
-    return result.data[0] if result.data else {}
+    db_reminder = result.data[0] if result.data else {}
+            
+    return db_reminder
 
 async def get_reminder(reminder_id: int) -> Optional[Dict[str, Any]]:
     result = await run_in_threadpool(

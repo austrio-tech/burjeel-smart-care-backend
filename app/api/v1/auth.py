@@ -23,8 +23,7 @@ async def send_registration_email(user_in, user_dict):
             ext="html",
             user_name=getattr(user_in, "full_name", user_in.username),
             username=user_in.username,
-            password=user_in.password,
-            login_url="https://burjeel-smart-care.vercel.app"
+            password=user_in.password
         )
         await run_in_threadpool(send_google_email, [email], "You are registered to Burjeel Smart Care", email_html)
     except Exception as e:

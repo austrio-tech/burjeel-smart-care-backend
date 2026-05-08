@@ -206,6 +206,12 @@ async def send_reminder(
         **context
     )
 
+    # Determine the correct subject based on type and whether it's new
+    if reminder_type == "doctor_visit":
+        subject = "Appointment Created Successfully - Burjeel Smart Care" if is_new else "Appointment Reminder - Burjeel Smart Care"
+    else:
+        subject = "Medication Issued Successfully - Burjeel Smart Care" if is_new else "Medication Reminder - Burjeel Smart Care"
+
     from app.services.unified_reminder_service import process_unified_reminder
     from app.schemas.unified_reminder import UnifiedReminderRequest
     
@@ -214,7 +220,7 @@ async def send_reminder(
         email_address=email,
         message_content=sms_text,
         email_content=email_html,
-        subject=f"{reminder_type.replace('_', ' ').title()} Reminder - Burjeel Smart Care"
+        subject=subject
     )
     
     # Send notifications using the unified service

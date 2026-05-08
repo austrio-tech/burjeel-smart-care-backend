@@ -126,6 +126,59 @@ async def websocket_endpoint(
         manager.disconnect(current_user["user_id"])
 
 
+@router.get("/conversations/", response_model=List[Dict])
+async def get_user_conversations(
+    current_user: dict = Depends(get_current_active_user)
+):
+    """Get all users with their chat history (if any) where current user is sender or receiver"""
+    
+    # Get all users except current user
+    all_users_result = await run_in_threadpool(
+        lambda: supabase.table("users")
+        .select("user_id, username, role, account_status")
+        .neq("user_id", current_user["user_id"])
+        .execute()
+    )
+    
+    if not all_users_result.data:
+        return []
+    
+    # Get all messages for current user
+    messages_result = await run_in_threadpool(
+        lambda: supabase.table("chat_messages")
+        .select("*")
+        .or_(f"sender_id.eq.{current_user['user_id']},receiver_id.eq.{current_user['user_id']}")
+        .order("timestamp", desc=True)
+        .execute()
+    )
+    
+    messages_data = messages_result.data or []
+    
+    # Create conversations dict from messages
+    conversations_by_user = {}
+    for msg in messages_data:
+        other_id = msg["receiver_id"] if msg["sender_id"] == current_user["user_id"] else msg["sender_id"]
+        if other_id not in conversations_by_user:
+            conversations_by_user[other_id] = []
+        conversations_by_user[other_id].append(msg)
+    
+    # Build result with all users
+    result_list = []
+    for user_data in all_users_result.data:
+        user_id = user_data["user_id"]
+        messages = conversations_by_user.get(user_id, [])
+        
+        result_list.append({
+            "other_participant": user_data,
+            "messages": sorted(messages, key=lambda x: x["timestamp"]) if messages else [],
+            "last_message_time": messages[0]["timestamp"] if messages else None,
+            "unread_count": len([m for m in messages if m["receiver_id"] == current_user["user_id"] and not m["is_read"]])
+        })
+    
+    # Sort by last message time (None goes to end)
+    return sorted(result_list, key=lambda x: (x["last_message_time"] is not None, x["last_message_time"] or ""), reverse=True)
+
+
 @router.get("/messages/", response_model=List[ChatMessageResponse])
 async def get_chat_messages(
     with_user_id: Optional[int] = None,

@@ -4,9 +4,9 @@ Hello {{patient_name}},
 
 Your medication has been successfully prescribed and registered.
 
-Type: {{reminder_type}}
-Details: {{reminder_details}}
-Start Date: {{scheduled_date}}
+Medication: {{medication_name}}
+Date: {{scheduled_date}}
+Time: {{time}}
 
 Follow all instructions carefully. Store safely and out of reach of children. For questions, contact: +968 9010 8360
 
