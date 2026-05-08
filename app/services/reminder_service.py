@@ -85,10 +85,9 @@ async def _process_reminders(start_dt: datetime, end_dt: datetime) -> Dict[str, 
         .select("*, patients(*, users!patients_user_id_fkey(*))")
         .gte("scheduled_date", start_dt.isoformat())
         .lte("scheduled_date", end_dt.isoformat())
-        .eq("success_sent", 0)
         .execute()
     )
-    
+    print(result)
     reminders = result.data if result.data else []
     logger.info(f"Found {len(reminders)} pending reminders")
     
@@ -224,7 +223,7 @@ async def process_today_reminders() -> Dict[str, Any]:
     """
     Find reminders scheduled for today from now and send notifications.
     """
-    now = datetime.utcnow()
+    now = datetime.now(pytz.utc)
     # End of today
     end_of_today = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
     return await _process_reminders(now, end_of_today)
@@ -233,7 +232,7 @@ async def process_upcoming_reminders() -> Dict[str, Any]:
     """
     Find reminders scheduled for the next 2 days from now and send notifications.
     """
-    now = datetime.utcnow()
+    now = datetime.now(pytz.utc)
     two_days_later = now + timedelta(days=2)
     return await _process_reminders(now, two_days_later)
 
