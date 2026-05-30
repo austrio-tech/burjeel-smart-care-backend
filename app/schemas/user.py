@@ -5,7 +5,7 @@ from pydantic import BaseModel, EmailStr
 
 class UserBase(BaseModel):
     username: str
-    email: EmailStr
+    email: Optional[EmailStr] = None
     role: str
     gender: Optional[str] = None
     profile_picture_url: Optional[str] = None
