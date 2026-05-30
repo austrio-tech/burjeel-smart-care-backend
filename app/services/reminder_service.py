@@ -1,3 +1,14 @@
+"""
+reminder_service.py
+
+Handles all business logic around patient reminders for the Burjeel Smart Care system.
+Responsibilities include:
+  - Creating, reading, and updating reminder records in the database.
+  - Scanning the database for reminders that are due and dispatching SMS + email notifications.
+  - Loading and populating HTML/text message templates from disk.
+  - Converting UTC timestamps to the Asia/Muscat timezone before displaying them to patients.
+"""
+
 from typing import List, Dict, Any, Optional
 from app.schemas import ReminderCreate, ReminderUpdate
 from app.core.supabase import supabase
@@ -18,20 +29,25 @@ MUSCAT_TZ = pytz.timezone("Asia/Muscat")
 
 def format_muscat_time(dt_str: str) -> str:
     """
-    Convert UTC datetime string to Asia/Muscat and format as '2:30 PM'.
+    Convert a UTC datetime string to the Asia/Muscat timezone and return it
+    formatted as a human-readable 12-hour clock string (e.g. '2:30 PM').
+
+    Parameters:
+        dt_str: An ISO 8601 datetime string, e.g. '2026-05-30T10:00:00Z'.
+
+    Returns:
+        A time string in Muscat local time, or the original string if parsing fails.
     """
     try:
-        # Parse the ISO string
+        # Replace the trailing 'Z' (which means UTC) with '+00:00' so Python's
+        # fromisoformat can understand it — Python < 3.11 does not accept 'Z' directly.
         dt = datetime.fromisoformat(dt_str.replace('Z', '+00:00'))
-        
-        # Ensure it's UTC if no timezone info
+
+        # If the datetime has no timezone information at all, assume it is UTC.
         if dt.tzinfo is None:
             dt = pytz.utc.localize(dt)
-            
-        # Convert to Muscat
+
         muscat_dt = dt.astimezone(MUSCAT_TZ)
-        
-        # Format as '2:30 PM'
         return muscat_dt.strftime("%I:%M %p")
     except Exception as e:
         logger.error(f"Error formatting Muscat time: {str(e)}")
@@ -39,7 +55,14 @@ def format_muscat_time(dt_str: str) -> str:
 
 def format_muscat_date(dt_str: str) -> str:
     """
-    Convert UTC datetime string to Asia/Muscat and format as 'May 04, 2026'.
+    Convert a UTC datetime string to the Asia/Muscat timezone and return it
+    formatted as a long-form date string (e.g. 'May 04, 2026').
+
+    Parameters:
+        dt_str: An ISO 8601 datetime string, e.g. '2026-05-30T10:00:00Z'.
+
+    Returns:
+        A date string in Muscat local time, or the original string if parsing fails.
     """
     try:
         dt = datetime.fromisoformat(dt_str.replace('Z', '+00:00'))
@@ -53,15 +76,26 @@ def format_muscat_date(dt_str: str) -> str:
 
 def get_template(template_name: str, ext: str = "html", **kwargs) -> str:
     """
-    Load, populate, and return content from the template file.
+    Load a message template file from disk, replace all named placeholders with
+    the provided values, and return the final content string.
+
+    Parameters:
+        template_name: The base filename (without extension) of the template, e.g. 'appointment'.
+        ext: The file extension — 'html' for email bodies, 'txt' for SMS bodies.
+        **kwargs: Key-value pairs where each key matches a {{key}} placeholder in the template.
+
+    Returns:
+        The fully populated template string, or a simple fallback string if the file cannot be read.
     """
     template_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "Send_Body")
     template_path = os.path.join(template_dir, f"{template_name}.{ext}")
     try:
         with open(template_path, "r", encoding="utf-8") as f:
             content = f.read()
-            
+
         for key, value in kwargs.items():
+            # Build the placeholder string in the format {{key}} — the double braces are
+            # needed because a single brace is used for Python f-string interpolation.
             placeholder = f"{{{{{key}}}}}"
             logger.debug(f"Attempting to replace {placeholder} with {value}")
             content = content.replace(placeholder, str(value))
@@ -74,12 +108,21 @@ def get_template(template_name: str, ext: str = "html", **kwargs) -> str:
 
 async def _process_reminders(start_dt: datetime, end_dt: datetime) -> Dict[str, Any]:
     """
-    Find reminders scheduled between start_dt and end_dt and send notifications.
+    Core worker that fetches reminders due within a time window and sends
+    SMS + email notifications to each patient.
+
+    Parameters:
+        start_dt: The beginning of the time window (timezone-aware UTC datetime).
+        end_dt: The end of the time window (timezone-aware UTC datetime).
+
+    Returns:
+        A summary dict with 'total_found', 'processed', and 'successful' counts.
     """
     logger.info(f"Processing reminders from {start_dt} to {end_dt}")
-    
-    # Fetch reminders in range that haven't been successfully sent yet
-    # Join patients and their associated user to get the email
+
+    # Fetch reminders in range, joining through patients to reach the user's email address.
+    # The nested select "patients(*, users!patients_user_id_fkey(*))" tells Supabase to
+    # also return the linked patient row and, inside that, the linked user row.
     result = await run_in_threadpool(
         lambda: supabase.table("reminders")
         .select("*, patients(*, users!patients_user_id_fkey(*))")
@@ -107,8 +150,8 @@ async def _process_reminders(start_dt: datetime, end_dt: datetime) -> Dict[str, 
             logger.warning(f"Reminder {reminder_id} has no associated patient data")
             continue
             
-        # Email is stored in the users table, linked to the patient
-        # Handle the explicit relationship key name from Supabase
+        # Email lives in the 'users' table, not 'patients'. Supabase returns the joined
+        # row under a key named after the FK constraint; fall back to plain "users" if needed.
         user_data = patient.get("users!patients_user_id_fkey") or patient.get("users")
         if isinstance(user_data, list):
             user = user_data[0] if user_data else None
@@ -198,6 +241,8 @@ async def _process_reminders(start_dt: datetime, end_dt: datetime) -> Dict[str, 
         
         logger.info(f"Reminder {reminder_id} result: SMS={response.sms_status.success}, Email={response.email_status.success}")
         
+        # Write the updated success/failure counters back to the database so the
+        # scheduler can track how many times each reminder has been attempted.
         await run_in_threadpool(
             lambda: supabase.table("reminders")
             .update({
@@ -221,22 +266,40 @@ async def _process_reminders(start_dt: datetime, end_dt: datetime) -> Dict[str, 
 
 async def process_today_reminders() -> Dict[str, Any]:
     """
-    Find reminders scheduled for today from now and send notifications.
+    Trigger notifications for all reminders that fall between right now and midnight UTC today.
+    Intended to be called by a scheduled job to send same-day reminders.
+
+    Returns:
+        A summary dict with total_found, processed, and successful counts.
     """
     now = datetime.now(pytz.utc)
-    # End of today
+    # Advance one day and zero out the time components to get exactly midnight at the end of today.
     end_of_today = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
     return await _process_reminders(now, end_of_today)
 
 async def process_upcoming_reminders() -> Dict[str, Any]:
     """
-    Find reminders scheduled for the next 2 days from now and send notifications.
+    Trigger notifications for all reminders due within the next 48 hours.
+    Intended to be called by a scheduled job to send advance reminders.
+
+    Returns:
+        A summary dict with total_found, processed, and successful counts.
     """
     now = datetime.now(pytz.utc)
     two_days_later = now + timedelta(days=2)
     return await _process_reminders(now, two_days_later)
 
 async def send_issue_notification(reminder: dict, patient: dict, user: dict):
+    """
+    Send an immediate confirmation notification to a patient when a new reminder (appointment
+    or medication) is created for them. Uses the *_issued template variants which have
+    different wording than the recurring reminder templates.
+
+    Parameters:
+        reminder: The newly created reminder record from the database.
+        patient: The patient record associated with the reminder.
+        user: The user record (holds the patient's email address).
+    """
     if not patient or not user or not user.get("email"):
         return
         
@@ -299,7 +362,18 @@ async def create_reminder(
     reminder_in: ReminderCreate,
     created_by: Optional[int] = None
 ) -> Dict[str, Any]:
+    """
+    Validate and persist a new reminder record to the database.
+
+    Parameters:
+        reminder_in: A ReminderCreate schema containing the reminder details from the API request.
+        created_by: The user_id of the staff member creating this reminder (optional).
+
+    Returns:
+        The newly inserted reminder record as a dict from the database.
+    """
     reminder_data = reminder_in.model_dump()
+    # Convert the Python datetime object to an ISO string, which is what the database expects.
     reminder_data["scheduled_date"] = reminder_data["scheduled_date"].isoformat()
     reminder_data["created_by"] = created_by
     now = datetime.utcnow().isoformat()
@@ -325,12 +399,30 @@ async def create_reminder(
     return db_reminder
 
 async def get_reminder(reminder_id: int) -> Optional[Dict[str, Any]]:
+    """
+    Retrieve a single reminder by its primary key.
+
+    Parameters:
+        reminder_id: The integer primary key of the reminder to look up.
+
+    Returns:
+        The reminder record as a dict, or None if not found.
+    """
     result = await run_in_threadpool(
         lambda: supabase.table("reminders").select("*").eq("reminder_id", reminder_id).execute()
     )
     return result.data[0] if result.data else None
 
 async def get_reminders_by_patient(patient_id: int) -> List[Dict[str, Any]]:
+    """
+    Retrieve all reminders associated with a specific patient.
+
+    Parameters:
+        patient_id: The numeric ID of the patient whose reminders to fetch.
+
+    Returns:
+        A list of reminder dicts; empty list if the patient has no reminders.
+    """
     result = await run_in_threadpool(
         lambda: supabase.table("reminders").select("*").eq("patient_id", patient_id).execute()
     )
@@ -340,8 +432,21 @@ async def update_reminder(
     reminder_id: int,
     reminder_in: ReminderUpdate
 ) -> Dict[str, Any]:
+    """
+    Apply partial updates to an existing reminder record.
+
+    Parameters:
+        reminder_id: The numeric ID of the reminder to update.
+        reminder_in: A ReminderUpdate schema with only the fields that should change.
+
+    Returns:
+        The updated reminder record as a dict, or an empty dict if nothing was changed.
+    """
+    # exclude_unset=True ensures only the fields the caller explicitly provided are sent,
+    # leaving all other fields unchanged in the database.
     update_data = reminder_in.model_dump(exclude_unset=True)
     if "scheduled_date" in update_data and update_data["scheduled_date"]:
+        # Convert the datetime object to an ISO string for the database.
         update_data["scheduled_date"] = update_data["scheduled_date"].isoformat()
     update_data["updated_at"] = datetime.utcnow().isoformat()
     
@@ -363,6 +468,12 @@ async def update_reminder(
     return result.data[0] if result.data else {}
 
 async def delete_reminder(reminder_id: int) -> None:
+    """
+    Permanently delete a reminder record from the database.
+
+    Parameters:
+        reminder_id: The numeric ID of the reminder to delete.
+    """
     await run_in_threadpool(
         lambda: supabase.table("reminders").delete().eq("reminder_id", reminder_id).execute()
     )
