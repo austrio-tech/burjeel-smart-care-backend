@@ -2,7 +2,7 @@
 Attendance (appointment check-in) endpoints for the Burjeel Smart Care API.
 
 This module tracks whether patients showed up for their scheduled appointments.
-Admins, doctors, and pharmacists can create and update attendance records.
+Admins and doctors can create and update attendance records.
 Any authenticated user can read attendance records, with optional date range filtering.
 """
 
@@ -20,10 +20,10 @@ router = APIRouter()
 @router.post("/", response_model=AttendanceResponse, status_code=status.HTTP_201_CREATED)
 async def create_attendance(
     attendance_in: AttendanceCreate,
-    current_user: dict = Depends(RoleChecker(["admin", "doctor", "pharmacist"]))
+    current_user: dict = Depends(RoleChecker(["admin", "doctor"]))
 ):
     """
-    POST /attendance/ — Admin, Doctor, or Pharmacist only.
+    POST /attendance/ — Admin or Doctor only.
     Marks a patient as attended (or not) for an appointment on a given date.
     Optionally links the record to an existing reminder. Returns the saved attendance record.
     """
@@ -106,10 +106,10 @@ async def get_attendance(
 async def update_attendance(
     attendance_id: int,
     attendance_in: AttendanceUpdate,
-    current_user: dict = Depends(RoleChecker(["admin", "doctor", "pharmacist"]))
+    current_user: dict = Depends(RoleChecker(["admin", "doctor"]))
 ):
     """
-    PUT /attendance/{attendance_id} — Admin, Doctor, or Pharmacist only.
+    PUT /attendance/{attendance_id} — Admin or Doctor only.
     Updates an existing attendance record (e.g. correcting the status or date).
     Only fields included in the request body are changed.
     """

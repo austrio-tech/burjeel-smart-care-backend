@@ -147,7 +147,7 @@ async def create_user_admin(
 ):
     """
     POST /create-user — Admin only.
-    Allows an admin to create any type of user account (doctor, pharmacist, it_staff, etc.).
+    Allows an admin to create any type of user account (doctor, etc.).
     Sends a welcome email to the new user and records who created the account.
     Returns the newly created user object.
     """

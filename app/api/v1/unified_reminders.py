@@ -5,7 +5,7 @@ This module exposes a single endpoint that sends a notification to a patient via
 SMS (Twilio) and email (Gmail) in one request. It is intended for manual ad-hoc
 notifications and includes a simple per-user rate limiter to prevent abuse.
 
-Accessible by: admin, doctor, pharmacist, and it_staff roles.
+Accessible by: admin and doctor roles.
 """
 
 from fastapi import APIRouter, Depends, HTTPException, status, Request
@@ -53,10 +53,10 @@ def check_rate_limit(user_id: int):
 @router.post("/", response_model=UnifiedReminderResponse)
 async def send_unified_reminder(
     request: UnifiedReminderRequest,
-    current_user: dict = Depends(RoleChecker(["admin", "doctor", "pharmacist", "it_staff"]))
+    current_user: dict = Depends(RoleChecker(["admin", "doctor"]))
 ):
     """
-    POST /unified-reminders/ — Admin, Doctor, Pharmacist, or IT Staff only.
+    POST /unified-reminders/ — Admin or Doctor only.
     Sends a custom notification to a patient via both SMS and email simultaneously.
     Subject to per-user rate limiting (max 5 requests per 60 seconds).
     Returns a response indicating the success or failure of each delivery channel.

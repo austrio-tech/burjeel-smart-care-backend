@@ -246,7 +246,7 @@ async def get_chat_messages(
             .execute()
         )
     else:
-        if current_user["role"] in ["admin", "doctor", "pharmacist", "it_staff"]:
+        if current_user["role"] in ["admin", "doctor"]:
             # Staff can see the full message log for moderation or audit purposes.
             result = await run_in_threadpool(
                 lambda: supabase.table("chat_messages").select("*").order("timestamp").execute()

@@ -104,8 +104,6 @@ docker-compose.yml           # Runs backend (and frontend) together
 |---|---|
 | `admin` | Everything |
 | `doctor` | Patients, reminders, attendance, reports, chat |
-| `pharmacist` | Attendance, unified reminders |
-| `it_staff` | Reports, chat |
 | `patient` | Own profile, own reminders, chat |
 
 ### Notifications
@@ -196,7 +194,7 @@ CREATE TABLE users (
     username             VARCHAR(50)  NOT NULL UNIQUE,
     email                VARCHAR(100) UNIQUE,
     password_hash        VARCHAR(255) NOT NULL,
-    role                 VARCHAR(20)  NOT NULL CHECK (role IN ('admin','doctor','pharmacist','it_staff','patient')),
+    role                 VARCHAR(20)  NOT NULL CHECK (role IN ('admin','doctor','patient')),
     gender               VARCHAR(10),
     profile_picture_url  TEXT,
     notification_preferences JSONB,
