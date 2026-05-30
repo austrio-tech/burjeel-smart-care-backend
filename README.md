@@ -117,6 +117,7 @@ docker-compose.yml           # Runs backend (and frontend) together
 - Clients connect to `ws://<host>/api/v1/chat/ws/{user_id}?token=<jwt>`.
 - The server keeps a dictionary of active connections and broadcasts messages to the right recipient.
 - Message history is stored in the `chat_messages` Supabase table.
+- `is_read` starts as `False` on every message. The frontend calls `PUT /api/v1/chat/messages/read` (with the sender's ID) whenever a conversation is opened, which flips `is_read` to `True` for all unread messages in that thread. The unread badge count is updated in the UI immediately without waiting for the next API poll.
 
 ---
 

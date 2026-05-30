@@ -318,6 +318,8 @@ async def mark_messages_read(
         # Only mark messages sent TO the current user FROM the given sender.
         .eq("sender_id", request.sender_id)
         .eq("receiver_id", current_user["user_id"])
+        # Skip rows that are already read — avoids unnecessary DB writes.
+        .eq("is_read", False)
         .execute()
     )
     return {"success": True, "marked_count": len(result.data) if result.data else 0}
